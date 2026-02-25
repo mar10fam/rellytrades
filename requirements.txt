@@ -1,5 +1,5 @@
 beautifulsoup4==4.14.3
-certifi==2026.1.4
+certifi==2025.11.12
 cffi==2.0.0
 charset-normalizer==3.4.4
 curl_cffi==0.13.0
@@ -10,9 +10,11 @@ numpy==2.4.2
 pandas==3.0.1
 peewee==4.0.0
 platformdirs==4.9.2
+polygon-api-client==1.16.3
 protobuf==6.33.5
 pycparser==3.0
 python-dateutil==2.9.0.post0
+python-dotenv==1.2.1
 pytz==2025.2
 requests==2.32.5
 six==1.17.0

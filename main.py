@@ -14,7 +14,7 @@ PERIOD = "60d"
 # Need two timeframes
 # - 5m candles: identify high and low of the day
 # - 1m candles: identify FVG breakouts and confirmation signals
-INTERVAL = ["5m", "1m"]
+INTERVALS = ["5m", "1m"]
 
 def download_stock_data(ticker: str, period: str, interval: str = "5m") -> pd.DataFrame:
     """
@@ -28,10 +28,23 @@ def download_stock_data(ticker: str, period: str, interval: str = "5m") -> pd.Da
     Returns:
         A pandas DataFrame with columns: Open, High, Low, Close, Volume
     """
-    return
+    print(f"Downloading {interval} data for {ticker} over the past {period}...")
+
+    # Download data using yfinance
+    data = yf.download(ticker, period=period, interval=interval)
+
+    # Check if data was downloaded successfully
+    if data.empty:
+        print(f"Warning: No data downloaded for {ticker} with interval {interval}.")
+        return pd.DataFrame()  # Return an empty DataFrame
+    
+    print(f"Downloaded {len(data)} rows of {interval} data for {ticker}.")
+    print(f"Data range: {data.index[0]} to {data.index[-1]}")
+
+    return data
 
 def download_all_intervals(ticker: str, period: str = PERIOD) -> dict[str, pd.DataFrame]:
-     """
+    """
     Downloads stock data for all required timeframes (5m and 1m).
 
     We need both because:
@@ -46,6 +59,16 @@ def download_all_intervals(ticker: str, period: str = PERIOD) -> dict[str, pd.Da
         A dictionary mapping interval strings to their DataFrames.
         Example: {"5m": DataFrame, "1m": DataFrame}
     """
+    all_data = {}
+
+    for interval in INTERVALS:
+        print(f"\n--- {interval} candles ---")
+        data = download_stock_data(ticker, period=period, interval=interval)
+
+        if not data.empty:
+            all_data[interval] = data
+
+    return all_data
     
 def save_to_csv(data: pd.DataFrame, ticker: str, interval: str) -> str:
     """
@@ -83,4 +106,6 @@ def inspect_data(data: pd.DataFrame, label: str = "") -> None:
 
 # === Main entry point ===
 if __name__ == "__main__":
-    print("Hello, world!")
+    all_data = download_all_intervals(TICKER)
+
+    print(all_data)
