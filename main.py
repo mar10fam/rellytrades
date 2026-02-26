@@ -10,11 +10,10 @@ from polygon import RESTClient
 # This reads the .env file and makes its values available via os.getenv()
 load_dotenv()
 
-
 # === Configuration ===
 
 # The stock ticker symbol to download data for
-TICKER = "AAPL"
+TICKER = "AMD"
 
 # Directory where CSV files will be saved
 DATA_DIR = "data"
@@ -50,7 +49,6 @@ INTERVAL_CONFIG = {
     "1m": {"multiplier": 1, "timespan": "minute"},
 }
 
-
 def get_polygon_client() -> RESTClient:
     """
     Creates and returns a Polygon API client using the API key from .env.
@@ -70,7 +68,6 @@ def get_polygon_client() -> RESTClient:
         )
 
     return RESTClient(api_key)
-
 
 def download_stock_data_chunk(
     client: RESTClient,
@@ -125,7 +122,6 @@ def download_stock_data_chunk(
 
     return bars
 
-
 def download_stock_data_chunk_with_retry(
     client: RESTClient,
     ticker: str,
@@ -173,7 +169,6 @@ def download_stock_data_chunk_with_retry(
             else:
                 # Not a rate limit error — don't retry, just raise it
                 raise
-
 
 def download_stock_data(
     client: RESTClient,
@@ -273,7 +268,6 @@ def download_stock_data(
 
     return data
 
-
 def download_all_intervals(client: RESTClient, ticker: str) -> dict[str, pd.DataFrame]:
     """
     Downloads stock data for all required timeframes (5m and 1m).
@@ -287,7 +281,7 @@ def download_all_intervals(client: RESTClient, ticker: str) -> dict[str, pd.Data
 
     Args:
         client: An authenticated Polygon RESTClient
-        ticker: Stock ticker symbol (e.g., "AAPL")
+        ticker: Stock ticker symbol (e.g., "AAPL")LMAO
 
     Returns:
         A dictionary mapping interval strings to their DataFrames.
@@ -320,7 +314,6 @@ def download_all_intervals(client: RESTClient, ticker: str) -> dict[str, pd.Data
 
     return all_data
 
-
 def save_to_csv(data: pd.DataFrame, ticker: str, interval: str) -> str:
     """
     Saves the downloaded stock data to a CSV file in the data/ directory.
@@ -345,7 +338,6 @@ def save_to_csv(data: pd.DataFrame, ticker: str, interval: str) -> str:
 
     return file_path
 
-
 def load_from_csv(ticker: str, interval: str) -> pd.DataFrame:
     """
     Loads previously saved stock data from a CSV file.
@@ -363,12 +355,20 @@ def load_from_csv(ticker: str, interval: str) -> pd.DataFrame:
         print(f"ERROR: No saved data found at {file_path}")
         return pd.DataFrame()
 
-    # Read the CSV and parse the first column (Datetime) as the index
-    data = pd.read_csv(file_path, index_col=0, parse_dates=True)
+    # Read the CSV with the first column as the index (don't auto-parse dates yet)
+    data = pd.read_csv(file_path, index_col=0)
+
+    # Manually parse the datetime index with pd.to_datetime().
+    # The CSV contains mixed UTC offsets (-05:00 for EST, -04:00 for EDT).
+    # pandas' parse_dates=True can't handle mixed offsets and produces a plain
+    # Index of strings. Using utc=True forces all timestamps to UTC first,
+    # then we convert to US/Eastern for consistent local-time filtering.
+    data.index = pd.to_datetime(data.index, utc=True)
+    data.index = data.index.tz_convert("US/Eastern")
+
     print(f"Loaded {len(data)} candles from {file_path}")
 
     return data
-
 
 def inspect_data(data: pd.DataFrame, label: str = "") -> None:
     """
@@ -393,27 +393,58 @@ def inspect_data(data: pd.DataFrame, label: str = "") -> None:
     print(f"\n=== Basic Statistics ({label}) ===")
     print(data.describe())
 
+def run_detection(ticker: str) -> None:
+    """
+    Load saved CSV data for a ticker and run FVG strategy detection.
+
+    Prints all detected setups with details. This is the Milestone 2
+    demo — detection only, no trades.
+
+    Args:
+        ticker: Stock ticker symbol (e.g., "AAPL", "AMD")
+    """
+    from strategies.fvg_strategy import FVGStrategy
+
+    # Load saved data for both timeframes
+    data_5m = load_from_csv(ticker, "5m")
+    data_1m = load_from_csv(ticker, "1m")
+
+    if data_5m.empty or data_1m.empty:
+        print(f"ERROR: Missing data for {ticker}. Run download first.")
+        return
+
+    # Run FVG strategy detection
+    print(f"\n{'=' * 60}")
+    print(f"  Running FVG Strategy Detection on {ticker}")
+    print(f"{'=' * 60}")
+
+    strategy = FVGStrategy()
+    setups = strategy.detect_setups(data_5m, data_1m)
+
+    # Print results
+    print(f"\nFound {len(setups)} valid setups for {ticker}:")
+    print(f"{'-' * 60}")
+
+    for i, setup in enumerate(setups, 1):
+        print(
+            f"  {i:3d}. {setup.date} | {setup.direction:5s} | "
+            f"Entry: ${setup.entry_price:.2f} | "
+            f"FVG: ${setup.fvg_low:.2f}-${setup.fvg_high:.2f} | "
+            f"OR: ${setup.opening_range_low:.2f}-${setup.opening_range_high:.2f} | "
+            f"Time: {setup.fvg_timestamp.strftime('%H:%M')}"
+        )
+
+    print(f"{'-' * 60}")
+
 
 # === Main Entry Point ===
 if __name__ == "__main__":
-    # Step 1: Create the Polygon client (uses API key from .env)
-    client = get_polygon_client()
+    # To download fresh data, uncomment the block below:
+    # client = get_polygon_client()
+    # print(f"Starting download for {TICKER}...")
+    # print(f"Lookback: {LOOKBACK_DAYS} days (~{LOOKBACK_DAYS // 365} years)")
+    # print(f"Retries: up to {MAX_RETRIES}x with {RETRY_WAIT_SECONDS}s wait on rate limit\n")
+    # all_data = download_all_intervals(client, TICKER)
 
-    # Step 2: Download both 5m and 1m candle data (up to 2 years of full trading days)
-    # Data is saved to CSV as each interval finishes, so progress isn't lost.
-    # If a chunk hits a 429 rate limit, it waits and retries automatically.
-    print(f"Starting download for {TICKER}...")
-    print(f"Lookback: {LOOKBACK_DAYS} days (~{LOOKBACK_DAYS // 365} years)")
-    print(f"Retries: up to {MAX_RETRIES}x with {RETRY_WAIT_SECONDS}s wait on rate limit\n")
-
-    all_data = download_all_intervals(client, TICKER)
-
-    # Step 3: Inspect saved data
-    print(f"\n{'=' * 60}")
-    print(f"  Download complete! Inspecting saved data...")
-    print(f"{'=' * 60}")
-
-    for interval in INTERVAL_CONFIG.keys():
-        loaded_data = load_from_csv(TICKER, interval)
-        if not loaded_data.empty:
-            inspect_data(loaded_data, label=interval)
+    # Run FVG strategy detection on saved data
+    run_detection(TICKER)
