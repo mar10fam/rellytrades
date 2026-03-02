@@ -397,25 +397,34 @@ def run_backtest(
     ticker: str,
     start: str = None,
     end: str = None,
-    risk_reward_ratio: float = 3.0,
+    risk_reward_ratio: float = 2.0,
+    starting_balance: float = 1000.0,
+    risk_per_trade: float = 0.01,
 ) -> None:
     """
     Run a full backtest on saved CSV data using the FVG strategy.
 
     Loads data, detects setups, simulates trades candle-by-candle,
-    and prints the results.
+    and prints the results. Supports fractional shares — position size
+    is calculated from the account balance and risk percentage.
 
     Args:
         ticker: Stock ticker symbol (e.g., "AAPL", "AMD")
         start: Start date in "YYYY-MM-DD" format (optional)
         end: End date in "YYYY-MM-DD" format (optional)
-        risk_reward_ratio: Take profit multiplier relative to risk (default 3.0)
+        risk_reward_ratio: Take profit multiplier relative to risk (default 2.0)
+        starting_balance: Initial account balance in dollars (default 1000.0)
+        risk_per_trade: Fraction of balance to risk per trade (default 0.01 = 1%)
     """
     from strategies.fvg_strategy import FVGStrategy
     from engine.backtester import Backtester
 
     strategy = FVGStrategy()
-    risk_config = {"risk_reward_ratio": risk_reward_ratio}
+    risk_config = {
+        "risk_reward_ratio": risk_reward_ratio,
+        "starting_balance": starting_balance,
+        "risk_per_trade": risk_per_trade,
+    }
     bt = Backtester(strategy=strategy, risk_config=risk_config)
 
     results = bt.run(ticker, start=start, end=end)
@@ -438,4 +447,4 @@ if __name__ == "__main__":
     # run_detection(TICKER)
 
     # Run full backtest (Milestone 3):
-    run_backtest(TICKER, start="2025-12-01", end="2025-12-31")
+    run_backtest(TICKER, start="2026-02-01", end="2026-02-24")

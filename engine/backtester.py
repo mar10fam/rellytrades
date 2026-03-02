@@ -34,6 +34,8 @@ from strategies.base_strategy import BaseStrategy, Setup, Entry, Exit
 
 DEFAULT_RISK_CONFIG = {
     "risk_reward_ratio": 2.0,  # Take profit at 2x the risk distance
+    "starting_balance": 1000.0,  # Initial account balance in dollars
+    "risk_per_trade": 0.01,  # Risk 1% of current balance per trade
 }
 
 # Market close time — positions are force-closed at end of day
@@ -61,6 +63,9 @@ class TradeRecord:
     result: str                # "win", "loss", or "closed_eod"
     or_high: float             # Opening range high for this trade's day
     or_low: float              # Opening range low for this trade's day
+    shares: float              # Number of shares traded (fractional allowed)
+    dollar_pnl: float          # Actual dollar P&L for this trade (pnl × shares)
+    balance_after: float       # Account balance after this trade
 
 
 @dataclass
@@ -72,6 +77,8 @@ class BacktestResult:
     the trade list so they're always consistent.
     """
     ticker: str                          # Which stock was backtested
+    starting_balance: float = 1000.0     # Initial account balance
+    risk_per_trade: float = 0.01         # Risk percentage per trade
     start_date: Optional[str] = None     # Start of the date range tested
     end_date: Optional[str] = None       # End of the date range tested
     trades: list[TradeRecord] = field(default_factory=list)
@@ -105,31 +112,45 @@ class BacktestResult:
 
     @property
     def total_pnl(self) -> float:
-        """Total profit/loss across all trades (per-share, summed)."""
-        return sum(t.pnl for t in self.trades)
+        """Total dollar P&L across all trades."""
+        return sum(t.dollar_pnl for t in self.trades)
+
+    @property
+    def ending_balance(self) -> float:
+        """Account balance after all trades."""
+        if not self.trades:
+            return self.starting_balance
+        return self.trades[-1].balance_after
+
+    @property
+    def total_return(self) -> float:
+        """Total return as a decimal (e.g., 0.05 = 5% gain)."""
+        if self.starting_balance == 0:
+            return 0.0
+        return (self.ending_balance - self.starting_balance) / self.starting_balance
 
     @property
     def avg_pnl(self) -> float:
-        """Average P&L per trade. Returns 0 if no trades."""
+        """Average dollar P&L per trade. Returns 0 if no trades."""
         if self.total_trades == 0:
             return 0.0
         return self.total_pnl / self.total_trades
 
     @property
     def avg_win(self) -> float:
-        """Average P&L on winning trades. Returns 0 if no wins."""
+        """Average dollar P&L on winning trades. Returns 0 if no wins."""
         winning_trades = [t for t in self.trades if t.result == "win"]
         if not winning_trades:
             return 0.0
-        return sum(t.pnl for t in winning_trades) / len(winning_trades)
+        return sum(t.dollar_pnl for t in winning_trades) / len(winning_trades)
 
     @property
     def avg_loss(self) -> float:
-        """Average P&L on losing trades. Returns 0 if no losses."""
+        """Average dollar P&L on losing trades. Returns 0 if no losses."""
         losing_trades = [t for t in self.trades if t.result == "loss"]
         if not losing_trades:
             return 0.0
-        return sum(t.pnl for t in losing_trades) / len(losing_trades)
+        return sum(t.dollar_pnl for t in losing_trades) / len(losing_trades)
 
     @property
     def profit_factor(self) -> float:
@@ -138,8 +159,8 @@ class BacktestResult:
         > 1.0 means the strategy is profitable overall.
         Returns 0 if no losing trades (can't divide by zero).
         """
-        gross_profit = sum(t.pnl for t in self.trades if t.pnl > 0)
-        gross_loss = abs(sum(t.pnl for t in self.trades if t.pnl < 0))
+        gross_profit = sum(t.dollar_pnl for t in self.trades if t.dollar_pnl > 0)
+        gross_loss = abs(sum(t.dollar_pnl for t in self.trades if t.dollar_pnl < 0))
         if gross_loss == 0:
             return float("inf") if gross_profit > 0 else 0.0
         return gross_profit / gross_loss
@@ -156,7 +177,11 @@ class BacktestResult:
         print(f"  Losses:         {self.losses}")
         print(f"  EOD closes:     {self.eod_closes}")
         print(f"  Win rate:       {self.win_rate:.1%}")
-        print(f"  Total P&L:      ${self.total_pnl:+.2f} (per share)")
+        print(f"  Risk per trade: {self.risk_per_trade:.1%}")
+        print(f"  Starting bal:   ${self.starting_balance:,.2f}")
+        print(f"  Ending bal:     ${self.ending_balance:,.2f}")
+        print(f"  Total P&L:      ${self.total_pnl:+,.2f}")
+        print(f"  Total return:   {self.total_return:+.2%}")
         print(f"  Avg P&L/trade:  ${self.avg_pnl:+.2f}")
         print(f"  Avg win:        ${self.avg_win:+.2f}")
         print(f"  Avg loss:       ${self.avg_loss:+.2f}")
@@ -174,16 +199,17 @@ class BacktestResult:
             print("  No trades to display.")
             return
 
-        print(f"\n{'=' * 120}")
+        print(f"\n{'=' * 148}")
         print(f"  Trade Log ({min(len(self.trades), max_trades)} of {len(self.trades)} trades)")
-        print(f"{'=' * 120}")
+        print(f"{'=' * 148}")
         print(
             f"  {'#':>3s}  {'Date':10s}  {'Dir':5s}  "
             f"{'OR High':>8s}  {'OR Low':>8s}  "
             f"{'Entry':>8s}  {'Exit':>8s}  {'SL':>8s}  {'TP':>8s}  "
-            f"{'P&L':>8s}  {'Result':10s}  {'Exit Time':5s}"
+            f"{'Shares':>8s}  {'$ P&L':>9s}  {'Balance':>10s}  "
+            f"{'Result':10s}  {'Exit Time':5s}"
         )
-        print(f"  {'-' * 114}")
+        print(f"  {'-' * 142}")
 
         for i, trade in enumerate(self.trades[:max_trades], 1):
             print(
@@ -192,14 +218,16 @@ class BacktestResult:
                 f"${trade.or_high:>7.2f}  ${trade.or_low:>7.2f}  "
                 f"${trade.entry_price:>7.2f}  ${trade.exit_price:>7.2f}  "
                 f"${trade.stop_loss:>7.2f}  ${trade.take_profit:>7.2f}  "
-                f"${trade.pnl:>+7.2f}  {trade.result:10s}  "
+                f"{trade.shares:>8.2f}  ${trade.dollar_pnl:>+8.2f}  "
+                f"${trade.balance_after:>9.2f}  "
+                f"{trade.result:10s}  "
                 f"{trade.exit_time.strftime('%H:%M'):5s}"
             )
 
         if len(self.trades) > max_trades:
             print(f"  ... and {len(self.trades) - max_trades} more trades")
 
-        print(f"  {'-' * 114}")
+        print(f"  {'-' * 142}")
 
 
 # === Backtester Class ===
@@ -273,19 +301,32 @@ class Backtester:
             data_5m = data_5m.loc[:end]
             data_1m = data_1m.loc[:end]
 
+        # Read account simulation config
+        starting_balance = self.risk_config.get("starting_balance", 1000.0)
+        risk_per_trade = self.risk_config.get("risk_per_trade", 0.01)
+        current_balance = starting_balance
+
         # Step 3: Detect setups
         print(f"\n{'=' * 60}")
         print(f"  Running backtest on {ticker}")
         if start and end:
             print(f"  Period: {start} to {end}")
-        print(f"  Risk config: {self.risk_config}")
+        print(f"  Starting balance: ${starting_balance:,.2f}")
+        print(f"  Risk per trade:   {risk_per_trade:.1%}")
+        print(f"  R:R ratio:        {self.risk_config.get('risk_reward_ratio', 2.0)}")
         print(f"{'=' * 60}")
 
         setups = self.strategy.detect_setups(data_5m, data_1m)
 
         if not setups:
             print("No setups found — nothing to backtest.")
-            return BacktestResult(ticker=ticker, start_date=start, end_date=end)
+            return BacktestResult(
+                ticker=ticker,
+                starting_balance=starting_balance,
+                risk_per_trade=risk_per_trade,
+                start_date=start,
+                end_date=end,
+            )
 
         # Step 4 & 5: Convert each setup to a trade and simulate it
         trades = []
@@ -299,20 +340,36 @@ class Backtester:
             # Ask the strategy for stop loss and take profit levels
             exit_levels = self.strategy.get_exit(entry, setup, self.risk_config)
 
+            # Calculate position size based on current balance and risk
+            # risk_per_share = distance from entry to stop loss
+            # shares = (balance × risk%) / risk_per_share
+            risk_per_share = abs(entry.price - exit_levels.stop_loss)
+            if risk_per_share == 0:
+                # Can't size a position with zero risk — skip this trade
+                continue
+            risk_amount = current_balance * risk_per_trade
+            shares = risk_amount / risk_per_share
+
             # Get 1m data for the trading day to simulate candle-by-candle
             day_str = setup.date.isoformat()
             if day_str not in data_1m.index:
                 continue
             day_1m = data_1m.loc[day_str]
 
-            # Simulate the trade
-            trade = self._simulate_trade(entry, exit_levels, day_1m, setup)
+            # Simulate the trade (returns per-share pnl in TradeRecord)
+            trade = self._simulate_trade(
+                entry, exit_levels, day_1m, setup, shares, current_balance
+            )
             if trade is not None:
+                # Update running balance after the trade
+                current_balance = trade.balance_after
                 trades.append(trade)
 
         # Step 6: Build and return results
         result = BacktestResult(
             ticker=ticker,
+            starting_balance=starting_balance,
+            risk_per_trade=risk_per_trade,
             start_date=start,
             end_date=end,
             trades=trades,
@@ -326,6 +383,8 @@ class Backtester:
         exit_levels: Exit,
         day_1m: pd.DataFrame,
         setup: "Setup" = None,
+        shares: float = 1.0,
+        current_balance: float = 1000.0,
     ) -> Optional[TradeRecord]:
         """
         Simulate a single trade candle-by-candle on 1-minute data.
@@ -389,22 +448,26 @@ class Backtester:
                 if dist_to_sl <= dist_to_tp:
                     # SL was closer to open — assume loss
                     return self._build_trade_record(
-                        entry, sl, timestamp, "loss", is_long, sl, tp, setup
+                        entry, sl, timestamp, "loss", is_long, sl, tp,
+                        setup, shares, current_balance
                     )
                 else:
                     # TP was closer to open — assume win
                     return self._build_trade_record(
-                        entry, tp, timestamp, "win", is_long, sl, tp, setup
+                        entry, tp, timestamp, "win", is_long, sl, tp,
+                        setup, shares, current_balance
                     )
 
             elif sl_hit:
                 return self._build_trade_record(
-                    entry, sl, timestamp, "loss", is_long, sl, tp, setup
+                    entry, sl, timestamp, "loss", is_long, sl, tp,
+                    setup, shares, current_balance
                 )
 
             elif tp_hit:
                 return self._build_trade_record(
-                    entry, tp, timestamp, "win", is_long, sl, tp, setup
+                    entry, tp, timestamp, "win", is_long, sl, tp,
+                    setup, shares, current_balance
                 )
 
         # End of day — neither SL nor TP was hit
@@ -413,7 +476,8 @@ class Backtester:
         last_close = float(after_entry.iloc[-1]["Close"])
 
         return self._build_trade_record(
-            entry, last_close, last_timestamp, "closed_eod", is_long, sl, tp, setup
+            entry, last_close, last_timestamp, "closed_eod", is_long, sl, tp,
+            setup, shares, current_balance
         )
 
     def _build_trade_record(
@@ -426,13 +490,14 @@ class Backtester:
         stop_loss: float,
         take_profit: float,
         setup: "Setup" = None,
+        shares: float = 1.0,
+        current_balance: float = 1000.0,
     ) -> TradeRecord:
         """
         Helper to build a TradeRecord with the correct P&L calculation.
 
-        P&L is calculated per share:
-        - Long: exit_price - entry_price (profit if price went up)
-        - Short: entry_price - exit_price (profit if price went down)
+        P&L is calculated per share first, then multiplied by position size
+        to get the actual dollar P&L. The running balance is updated.
 
         Args:
             entry: The trade entry.
@@ -442,14 +507,22 @@ class Backtester:
             is_long: True for long trades, False for short.
             stop_loss: The stop loss price level for this trade.
             take_profit: The take profit price level for this trade.
+            setup: The original Setup (for opening range data).
+            shares: Number of shares traded (fractional).
+            current_balance: Account balance before this trade.
 
         Returns:
             A completed TradeRecord.
         """
+        # Calculate per-share P&L
         if is_long:
             pnl = exit_price - entry.price
         else:
             pnl = entry.price - exit_price
+
+        # Calculate actual dollar P&L based on position size
+        dollar_pnl = pnl * shares
+        balance_after = current_balance + dollar_pnl
 
         return TradeRecord(
             entry_time=entry.timestamp,
@@ -463,4 +536,7 @@ class Backtester:
             result=result,
             or_high=setup.opening_range_high if setup else 0.0,
             or_low=setup.opening_range_low if setup else 0.0,
+            shares=shares,
+            dollar_pnl=dollar_pnl,
+            balance_after=balance_after,
         )
