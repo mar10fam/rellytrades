@@ -134,10 +134,21 @@ class FVGStrategy(BaseStrategy):
         if breakout_fvg is None:
             return None
 
-        # Step 5: Build and return the Setup
+        # Step 5: Find the first candle that closed outside the opening range
+        # This candle's low (longs) or high (shorts) becomes the stop loss
+        direction = "long" if breakout_fvg.direction == "bullish" else "short"
+        breakout_candle = self._find_breakout_candle(
+            scan_data, or_high, or_low, direction
+        )
+
+        # Default to the FVG candle 1 levels if no breakout candle found
+        bo_low = breakout_candle["Low"] if breakout_candle is not None else breakout_fvg.candle_1_low
+        bo_high = breakout_candle["High"] if breakout_candle is not None else breakout_fvg.candle_1_high
+
+        # Step 6: Build and return the Setup
         return Setup(
             date=trading_day,
-            direction="long" if breakout_fvg.direction == "bullish" else "short",
+            direction=direction,
             entry_price=breakout_fvg.candle_3_close,
             fvg_high=breakout_fvg.fvg_high,
             fvg_low=breakout_fvg.fvg_low,
@@ -145,24 +156,83 @@ class FVGStrategy(BaseStrategy):
             opening_range_low=or_low,
             timeframe_used="1m",
             fvg_timestamp=breakout_fvg.candle_3_timestamp,
+            breakout_candle_low=float(bo_low),
+            breakout_candle_high=float(bo_high),
         )
 
     def get_entry(self, setup: Setup, confirmation) -> Optional[Entry]:
         """
-        Placeholder — will be implemented in Milestone 3/4.
-        For now, returns None (no confirmation logic yet).
-        """
-        return None
+        Convert a detected setup into a trade entry.
 
-    def get_exit(self, entry: Entry, risk_config: dict) -> Exit:
+        In Milestone 3 (no confirmation signals yet), every setup is
+        entered directly — confirmation=None means "always enter."
+        Milestone 4 will add confirmation gating here.
+
+        Args:
+            setup: A detected Setup from detect_setup().
+            confirmation: A confirmation signal instance, or None.
+                          When None, the setup is entered unconditionally.
+
+        Returns:
+            An Entry if the trade should be taken, or None to skip.
         """
-        Placeholder — will be implemented in Milestone 3/5.
-        For now, returns a default exit with 3:1 R:R ratio.
+        # M3: No confirmation required — enter every setup
+        if confirmation is not None:
+            # Future: ask the confirmation module if this setup is valid
+            # For now, just enter anyway
+            pass
+
+        return Entry(
+            date=setup.date,
+            direction=setup.direction,
+            price=setup.entry_price,
+            timestamp=setup.fvg_timestamp,
+        )
+
+    def get_exit(self, entry: Entry, setup: Setup, risk_config: dict) -> Exit:
         """
+        Calculate stop loss and take profit levels.
+
+        Stop loss is placed at the first candle that closed outside the
+        opening range:
+        - Long trades: SL at that candle's Low (support from the breakout candle)
+        - Short trades: SL at that candle's High (resistance from the breakout candle)
+
+        This is tighter than using the full opening range, which means:
+        - Smaller risk per trade
+        - Take profit is closer and more reachable
+        - Faster resolution (fewer EOD closes)
+
+        Take profit is calculated from the risk distance times the R:R ratio:
+        - Risk = distance from entry to stop loss
+        - TP = entry + (risk * R:R ratio) for longs
+        - TP = entry - (risk * R:R ratio) for shorts
+
+        Args:
+            entry: The confirmed trade entry.
+            setup: The original Setup (contains breakout candle levels).
+            risk_config: Must contain "risk_reward_ratio" (e.g., 2.0).
+
+        Returns:
+            An Exit with stop_loss, take_profit, and the R:R ratio used.
+        """
+        rr_ratio = risk_config.get("risk_reward_ratio", 2.0)
+
+        if entry.direction == "long":
+            # Long: SL at the breakout candle's low, TP above entry
+            stop_loss = setup.breakout_candle_low
+            risk = entry.price - stop_loss
+            take_profit = entry.price + (risk * rr_ratio)
+        else:
+            # Short: SL at the breakout candle's high, TP below entry
+            stop_loss = setup.breakout_candle_high
+            risk = stop_loss - entry.price
+            take_profit = entry.price - (risk * rr_ratio)
+
         return Exit(
-            stop_loss=0.0,
-            take_profit=0.0,
-            risk_reward_ratio=3.0,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            risk_reward_ratio=rr_ratio,
         )
 
     # === Private Helper Methods ===
@@ -231,6 +301,45 @@ class FVGStrategy(BaseStrategy):
         mask = (candle_times >= SCAN_START_TIME) & (candle_times <= self.scan_end_time)
 
         return data_1m[mask]
+
+    def _find_breakout_candle(
+        self,
+        scan_data: pd.DataFrame,
+        or_high: float,
+        or_low: float,
+        direction: str,
+    ) -> Optional[pd.Series]:
+        """
+        Find the first 1-minute candle that closed outside the opening range.
+
+        For longs: the first candle whose Close > OR high.
+        For shorts: the first candle whose Close < OR low.
+
+        This candle's Low (longs) or High (shorts) is used as the stop loss,
+        since it represents the nearest support/resistance from the actual
+        breakout move.
+
+        Args:
+            scan_data: 1-minute candle data within the scan window.
+            or_high: Opening range high price.
+            or_low: Opening range low price.
+            direction: "long" or "short".
+
+        Returns:
+            The first candle (as a pandas Series) that closed outside the OR,
+            or None if no such candle exists.
+        """
+        if direction == "long":
+            # First candle that closed above the opening range high
+            breakout_candles = scan_data[scan_data["Close"] > or_high]
+        else:
+            # First candle that closed below the opening range low
+            breakout_candles = scan_data[scan_data["Close"] < or_low]
+
+        if breakout_candles.empty:
+            return None
+
+        return breakout_candles.iloc[0]
 
     def _find_fvgs(self, scan_data: pd.DataFrame) -> list[FVG]:
         """

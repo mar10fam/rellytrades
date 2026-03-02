@@ -393,48 +393,36 @@ def inspect_data(data: pd.DataFrame, label: str = "") -> None:
     print(f"\n=== Basic Statistics ({label}) ===")
     print(data.describe())
 
-def run_detection(ticker: str) -> None:
+def run_backtest(
+    ticker: str,
+    start: str = None,
+    end: str = None,
+    risk_reward_ratio: float = 3.0,
+) -> None:
     """
-    Load saved CSV data for a ticker and run FVG strategy detection.
+    Run a full backtest on saved CSV data using the FVG strategy.
 
-    Prints all detected setups with details. This is the Milestone 2
-    demo — detection only, no trades.
+    Loads data, detects setups, simulates trades candle-by-candle,
+    and prints the results.
 
     Args:
         ticker: Stock ticker symbol (e.g., "AAPL", "AMD")
+        start: Start date in "YYYY-MM-DD" format (optional)
+        end: End date in "YYYY-MM-DD" format (optional)
+        risk_reward_ratio: Take profit multiplier relative to risk (default 3.0)
     """
     from strategies.fvg_strategy import FVGStrategy
-
-    # Load saved data for both timeframes
-    data_5m = load_from_csv(ticker, "5m")
-    data_1m = load_from_csv(ticker, "1m")
-
-    if data_5m.empty or data_1m.empty:
-        print(f"ERROR: Missing data for {ticker}. Run download first.")
-        return
-
-    # Run FVG strategy detection
-    print(f"\n{'=' * 60}")
-    print(f"  Running FVG Strategy Detection on {ticker}")
-    print(f"{'=' * 60}")
+    from engine.backtester import Backtester
 
     strategy = FVGStrategy()
-    setups = strategy.detect_setups(data_5m, data_1m)
+    risk_config = {"risk_reward_ratio": risk_reward_ratio}
+    bt = Backtester(strategy=strategy, risk_config=risk_config)
 
-    # Print results
-    print(f"\nFound {len(setups)} valid setups for {ticker}:")
-    print(f"{'-' * 60}")
+    results = bt.run(ticker, start=start, end=end)
 
-    for i, setup in enumerate(setups, 1):
-        print(
-            f"  {i:3d}. {setup.date} | {setup.direction:5s} | "
-            f"Entry: ${setup.entry_price:.2f} | "
-            f"FVG: ${setup.fvg_low:.2f}-${setup.fvg_high:.2f} | "
-            f"OR: ${setup.opening_range_low:.2f}-${setup.opening_range_high:.2f} | "
-            f"Time: {setup.fvg_timestamp.strftime('%H:%M')}"
-        )
-
-    print(f"{'-' * 60}")
+    # Print the trade log and summary
+    results.print_trades()
+    results.print_summary()
 
 
 # === Main Entry Point ===
@@ -446,5 +434,8 @@ if __name__ == "__main__":
     # print(f"Retries: up to {MAX_RETRIES}x with {RETRY_WAIT_SECONDS}s wait on rate limit\n")
     # all_data = download_all_intervals(client, TICKER)
 
-    # Run FVG strategy detection on saved data
-    run_detection(TICKER)
+    # Run detection only (Milestone 2):
+    # run_detection(TICKER)
+
+    # Run full backtest (Milestone 3):
+    run_backtest(TICKER, start="2025-01-01", end="2025-01-31")

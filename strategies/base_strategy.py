@@ -41,6 +41,8 @@ class Setup:
     opening_range_low: float      # Low of the opening range candle
     timeframe_used: str           # Which timeframe detected this (e.g., "1m")
     fvg_timestamp: datetime       # Timestamp of the FVG completion (candle 3)
+    breakout_candle_low: float    # Low of the first candle that closed outside the OR
+    breakout_candle_high: float   # High of the first candle that closed outside the OR
 
 
 @dataclass
@@ -136,14 +138,19 @@ class BaseStrategy(ABC):
         pass
 
     @abstractmethod
-    def get_exit(self, entry: Entry, risk_config: dict) -> Exit:
+    def get_exit(self, entry: Entry, setup: Setup, risk_config: dict) -> Exit:
         """
         Calculate stop loss and take profit levels for a confirmed entry.
 
-        Placeholder for Milestone 3+ — not used in Milestone 2.
+        Each strategy defines its own SL placement logic based on its
+        setup details. The engine passes both the entry and the original
+        setup so the strategy can reference whatever it needs (e.g.,
+        opening range levels, FVG zone, etc.) without the engine
+        needing to understand those concepts.
 
         Args:
             entry: A confirmed Entry from get_entry().
+            setup: The original Setup that generated this entry.
             risk_config: Dictionary with risk parameters like
                          risk_reward_ratio, risk_per_trade, etc.
 
