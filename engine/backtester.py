@@ -54,6 +54,7 @@ class TradeRecord:
     """
     entry_time: datetime       # Timestamp when the trade was entered
     exit_time: datetime        # Timestamp when the trade was exited
+    ticker: str                # Which stock this trade is on
     direction: str             # "long" or "short"
     entry_price: float         # Price at which the trade was entered
     exit_price: float          # Price at which the trade was exited
@@ -199,21 +200,22 @@ class BacktestResult:
             print("  No trades to display.")
             return
 
-        print(f"\n{'=' * 148}")
+        print(f"\n{'=' * 160}")
         print(f"  Trade Log ({min(len(self.trades), max_trades)} of {len(self.trades)} trades)")
-        print(f"{'=' * 148}")
+        print(f"{'=' * 160}")
         print(
-            f"  {'#':>3s}  {'Date':10s}  {'Dir':5s}  "
+            f"  {'#':>3s}  {'Date':10s}  {'Ticker':6s}  {'Dir':5s}  "
             f"{'OR High':>8s}  {'OR Low':>8s}  "
             f"{'Entry':>8s}  {'Exit':>8s}  {'SL':>8s}  {'TP':>8s}  "
             f"{'Shares':>8s}  {'$ P&L':>9s}  {'Balance':>10s}  "
             f"{'Result':10s}  {'Exit Time':5s}"
         )
-        print(f"  {'-' * 142}")
+        print(f"  {'-' * 154}")
 
         for i, trade in enumerate(self.trades[:max_trades], 1):
             print(
                 f"  {i:3d}  {trade.entry_time.strftime('%Y-%m-%d'):10s}  "
+                f"{trade.ticker:6s}  "
                 f"{trade.direction:5s}  "
                 f"${trade.or_high:>7.2f}  ${trade.or_low:>7.2f}  "
                 f"${trade.entry_price:>7.2f}  ${trade.exit_price:>7.2f}  "
@@ -227,7 +229,7 @@ class BacktestResult:
         if len(self.trades) > max_trades:
             print(f"  ... and {len(self.trades) - max_trades} more trades")
 
-        print(f"  {'-' * 142}")
+        print(f"  {'-' * 154}")
 
 
 # === Backtester Class ===
@@ -331,6 +333,9 @@ class Backtester:
         # Step 4 & 5: Convert each setup to a trade and simulate it
         trades = []
         for setup in setups:
+            # Tag setup with ticker so TradeRecord knows which stock
+            setup.ticker = ticker
+
             # Ask the strategy if this setup should be entered
             # (In M3, confirmation=None means "always enter")
             entry = self.strategy.get_entry(setup, confirmation=None)
@@ -376,6 +381,133 @@ class Backtester:
         )
 
         return result
+
+    def run_multi(
+        self,
+        tickers: list[str],
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+    ) -> BacktestResult:
+        """
+        Run a backtest across multiple tickers with a shared account balance.
+
+        Detects setups for each ticker independently, then merges all setups
+        into a single chronological timeline. Trades are processed in order
+        of entry timestamp, so the shared balance compounds across stocks.
+
+        This simulates monitoring a watchlist and taking the best setup on
+        any stock each day, all from the same account.
+
+        Args:
+            tickers: List of stock ticker symbols (e.g., ["AMD", "AAPL"]).
+            start: Start date in "YYYY-MM-DD" format (inclusive). Optional.
+            end: End date in "YYYY-MM-DD" format (inclusive). Optional.
+
+        Returns:
+            A single BacktestResult with all trades across all tickers,
+            sorted chronologically with a shared running balance.
+        """
+        from main import load_from_csv
+
+        starting_balance = self.risk_config.get("starting_balance", 1000.0)
+        risk_per_trade = self.risk_config.get("risk_per_trade", 0.01)
+        current_balance = starting_balance
+
+        ticker_label = ", ".join(tickers)
+
+        print(f"\n{'=' * 60}")
+        print(f"  Multi-stock backtest: {ticker_label}")
+        if start and end:
+            print(f"  Period: {start} to {end}")
+        print(f"  Starting balance: ${starting_balance:,.2f}")
+        print(f"  Risk per trade:   {risk_per_trade:.1%}")
+        print(f"  R:R ratio:        {self.risk_config.get('risk_reward_ratio', 2.0)}")
+        print(f"{'=' * 60}")
+
+        # Step 1: Gather all (setup, entry, exit, ticker, day_1m) tuples
+        # from every ticker so we can sort and process them chronologically
+        all_trade_inputs = []
+
+        for ticker in tickers:
+            data_5m = load_from_csv(ticker, "5m")
+            data_1m = load_from_csv(ticker, "1m")
+
+            if data_5m.empty or data_1m.empty:
+                print(f"  WARNING: Missing data for {ticker}, skipping.")
+                continue
+
+            # Filter to date range
+            if start:
+                data_5m = data_5m.loc[start:]
+                data_1m = data_1m.loc[start:]
+            if end:
+                data_5m = data_5m.loc[:end]
+                data_1m = data_1m.loc[:end]
+
+            # Detect setups for this ticker
+            setups = self.strategy.detect_setups(data_5m, data_1m)
+            if not setups:
+                print(f"  {ticker}: 0 setups found")
+                continue
+
+            print(f"  {ticker}: {len(setups)} setups found")
+
+            for setup in setups:
+                # Tag the setup with its ticker so TradeRecord knows
+                setup.ticker = ticker
+
+                entry = self.strategy.get_entry(setup, confirmation=None)
+                if entry is None:
+                    continue
+
+                exit_levels = self.strategy.get_exit(entry, setup, self.risk_config)
+
+                # Get 1m data for this day
+                day_str = setup.date.isoformat()
+                if day_str not in data_1m.index:
+                    continue
+                day_1m = data_1m.loc[day_str]
+
+                all_trade_inputs.append((setup, entry, exit_levels, day_1m))
+
+        if not all_trade_inputs:
+            print("No setups found across any ticker — nothing to backtest.")
+            return BacktestResult(
+                ticker=ticker_label,
+                starting_balance=starting_balance,
+                risk_per_trade=risk_per_trade,
+                start_date=start,
+                end_date=end,
+            )
+
+        # Step 2: Sort all trade inputs chronologically by entry timestamp
+        # This ensures the shared balance is updated in the correct order
+        all_trade_inputs.sort(key=lambda x: x[1].timestamp)
+
+        # Step 3: Process each trade in order, sizing from the shared balance
+        trades = []
+        for setup, entry, exit_levels, day_1m in all_trade_inputs:
+            risk_per_share = abs(entry.price - exit_levels.stop_loss)
+            if risk_per_share == 0:
+                continue
+            risk_amount = current_balance * risk_per_trade
+            shares = risk_amount / risk_per_share
+
+            trade = self._simulate_trade(
+                entry, exit_levels, day_1m, setup, shares, current_balance
+            )
+            if trade is not None:
+                current_balance = trade.balance_after
+                trades.append(trade)
+
+        return BacktestResult(
+            ticker=ticker_label,
+            starting_balance=starting_balance,
+            risk_per_trade=risk_per_trade,
+            start_date=start,
+            end_date=end,
+            trades=trades,
+        )
 
     def _simulate_trade(
         self,
@@ -527,6 +659,7 @@ class Backtester:
         return TradeRecord(
             entry_time=entry.timestamp,
             exit_time=exit_time,
+            ticker=setup.ticker if setup and hasattr(setup, 'ticker') else "",
             direction=entry.direction,
             entry_price=entry.price,
             exit_price=exit_price,

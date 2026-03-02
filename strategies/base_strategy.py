@@ -43,6 +43,7 @@ class Setup:
     fvg_timestamp: datetime       # Timestamp of the FVG completion (candle 3)
     breakout_candle_low: float    # Low of the first candle that closed outside the OR
     breakout_candle_high: float   # High of the first candle that closed outside the OR
+    ticker: str = ""              # Stock ticker (set by engine for multi-stock runs)
 
 
 @dataclass

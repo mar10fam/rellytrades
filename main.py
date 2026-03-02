@@ -434,6 +434,50 @@ def run_backtest(
     results.print_summary()
 
 
+def run_multi_backtest(
+    tickers: list[str],
+    start: str = None,
+    end: str = None,
+    risk_reward_ratio: float = 2.0,
+    starting_balance: float = 1000.0,
+    risk_per_trade: float = 0.01,
+) -> None:
+    """
+    Run a backtest across multiple tickers with a shared account balance.
+
+    All trades from all tickers are merged into a single chronological
+    timeline. The balance compounds across stocks — wins on AMD grow
+    your position size on the next AAPL trade, and vice versa.
+
+    This simulates monitoring a watchlist and trading any stock that
+    gives a setup, all from the same account.
+
+    Args:
+        tickers: List of stock ticker symbols (e.g., ["AMD", "AAPL"])
+        start: Start date in "YYYY-MM-DD" format (optional)
+        end: End date in "YYYY-MM-DD" format (optional)
+        risk_reward_ratio: Take profit multiplier relative to risk (default 2.0)
+        starting_balance: Initial account balance in dollars (default 1000.0)
+        risk_per_trade: Fraction of balance to risk per trade (default 0.01 = 1%)
+    """
+    from strategies.fvg_strategy import FVGStrategy
+    from engine.backtester import Backtester
+
+    strategy = FVGStrategy()
+    risk_config = {
+        "risk_reward_ratio": risk_reward_ratio,
+        "starting_balance": starting_balance,
+        "risk_per_trade": risk_per_trade,
+    }
+    bt = Backtester(strategy=strategy, risk_config=risk_config)
+
+    results = bt.run_multi(tickers, start=start, end=end)
+
+    # Print the trade log and summary
+    results.print_trades()
+    results.print_summary()
+
+
 # === Main Entry Point ===
 if __name__ == "__main__":
     # To download fresh data, uncomment the block below:
@@ -446,5 +490,15 @@ if __name__ == "__main__":
     # Run detection only (Milestone 2):
     # run_detection(TICKER)
 
-    # Run full backtest (Milestone 3):
-    run_backtest(TICKER, start="2026-02-01", end="2026-02-24")
+    # Run single-stock backtest:
+    # run_backtest(TICKER, start="2024-02-26", end="2026-02-24", risk_reward_ratio=3.0, risk_per_trade=0.02)
+
+    # Run multi-stock backtest (shared balance across all tickers):
+    run_multi_backtest(
+        tickers=["AMD", "AAPL"],
+        start="2024-02-26",
+        end="2026-02-24",
+        risk_reward_ratio=4.0,
+        risk_per_trade=0.02,
+        starting_balance=1000.0,
+    )
