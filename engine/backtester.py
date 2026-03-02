@@ -59,6 +59,8 @@ class TradeRecord:
     take_profit: float         # The take profit level
     pnl: float                 # Dollar profit/loss on this trade (per share)
     result: str                # "win", "loss", or "closed_eod"
+    or_high: float             # Opening range high for this trade's day
+    or_low: float              # Opening range low for this trade's day
 
 
 @dataclass
@@ -172,20 +174,22 @@ class BacktestResult:
             print("  No trades to display.")
             return
 
-        print(f"\n{'=' * 100}")
+        print(f"\n{'=' * 120}")
         print(f"  Trade Log ({min(len(self.trades), max_trades)} of {len(self.trades)} trades)")
-        print(f"{'=' * 100}")
+        print(f"{'=' * 120}")
         print(
             f"  {'#':>3s}  {'Date':10s}  {'Dir':5s}  "
+            f"{'OR High':>8s}  {'OR Low':>8s}  "
             f"{'Entry':>8s}  {'Exit':>8s}  {'SL':>8s}  {'TP':>8s}  "
             f"{'P&L':>8s}  {'Result':10s}  {'Exit Time':5s}"
         )
-        print(f"  {'-' * 94}")
+        print(f"  {'-' * 114}")
 
         for i, trade in enumerate(self.trades[:max_trades], 1):
             print(
                 f"  {i:3d}  {trade.entry_time.strftime('%Y-%m-%d'):10s}  "
                 f"{trade.direction:5s}  "
+                f"${trade.or_high:>7.2f}  ${trade.or_low:>7.2f}  "
                 f"${trade.entry_price:>7.2f}  ${trade.exit_price:>7.2f}  "
                 f"${trade.stop_loss:>7.2f}  ${trade.take_profit:>7.2f}  "
                 f"${trade.pnl:>+7.2f}  {trade.result:10s}  "
@@ -195,7 +199,7 @@ class BacktestResult:
         if len(self.trades) > max_trades:
             print(f"  ... and {len(self.trades) - max_trades} more trades")
 
-        print(f"  {'-' * 94}")
+        print(f"  {'-' * 114}")
 
 
 # === Backtester Class ===
@@ -302,7 +306,7 @@ class Backtester:
             day_1m = data_1m.loc[day_str]
 
             # Simulate the trade
-            trade = self._simulate_trade(entry, exit_levels, day_1m)
+            trade = self._simulate_trade(entry, exit_levels, day_1m, setup)
             if trade is not None:
                 trades.append(trade)
 
@@ -321,6 +325,7 @@ class Backtester:
         entry: Entry,
         exit_levels: Exit,
         day_1m: pd.DataFrame,
+        setup: "Setup" = None,
     ) -> Optional[TradeRecord]:
         """
         Simulate a single trade candle-by-candle on 1-minute data.
@@ -384,22 +389,22 @@ class Backtester:
                 if dist_to_sl <= dist_to_tp:
                     # SL was closer to open — assume loss
                     return self._build_trade_record(
-                        entry, sl, timestamp, "loss", is_long, sl, tp
+                        entry, sl, timestamp, "loss", is_long, sl, tp, setup
                     )
                 else:
                     # TP was closer to open — assume win
                     return self._build_trade_record(
-                        entry, tp, timestamp, "win", is_long, sl, tp
+                        entry, tp, timestamp, "win", is_long, sl, tp, setup
                     )
 
             elif sl_hit:
                 return self._build_trade_record(
-                    entry, sl, timestamp, "loss", is_long, sl, tp
+                    entry, sl, timestamp, "loss", is_long, sl, tp, setup
                 )
 
             elif tp_hit:
                 return self._build_trade_record(
-                    entry, tp, timestamp, "win", is_long, sl, tp
+                    entry, tp, timestamp, "win", is_long, sl, tp, setup
                 )
 
         # End of day — neither SL nor TP was hit
@@ -408,7 +413,7 @@ class Backtester:
         last_close = float(after_entry.iloc[-1]["Close"])
 
         return self._build_trade_record(
-            entry, last_close, last_timestamp, "closed_eod", is_long, sl, tp
+            entry, last_close, last_timestamp, "closed_eod", is_long, sl, tp, setup
         )
 
     def _build_trade_record(
@@ -420,6 +425,7 @@ class Backtester:
         is_long: bool,
         stop_loss: float,
         take_profit: float,
+        setup: "Setup" = None,
     ) -> TradeRecord:
         """
         Helper to build a TradeRecord with the correct P&L calculation.
@@ -455,4 +461,6 @@ class Backtester:
             take_profit=take_profit,
             pnl=pnl,
             result=result,
+            or_high=setup.opening_range_high if setup else 0.0,
+            or_low=setup.opening_range_low if setup else 0.0,
         )

@@ -438,4 +438,4 @@ if __name__ == "__main__":
     # run_detection(TICKER)
 
     # Run full backtest (Milestone 3):
-    run_backtest(TICKER, start="2025-01-01", end="2025-01-31")
+    run_backtest(TICKER, start="2025-12-01", end="2025-12-31")
