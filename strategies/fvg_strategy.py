@@ -160,27 +160,34 @@ class FVGStrategy(BaseStrategy):
             breakout_candle_high=float(bo_high),
         )
 
-    def get_entry(self, setup: Setup, confirmation) -> Optional[Entry]:
+    def get_entry(
+        self,
+        setup: Setup,
+        confirmation=None,
+        day_1m: pd.DataFrame = None,
+    ) -> Optional[Entry]:
         """
-        Convert a detected setup into a trade entry.
+        Convert a detected setup into a trade entry, optionally gated
+        by a confirmation signal.
 
-        In Milestone 3 (no confirmation signals yet), every setup is
-        entered directly — confirmation=None means "always enter."
-        Milestone 4 will add confirmation gating here.
+        If confirmation is None, every setup is entered (baseline mode).
+        If confirmation is provided, it must pass for the entry to proceed.
+        This allows mixing and matching confirmation signals per backtest run.
 
         Args:
             setup: A detected Setup from detect_setup().
             confirmation: A confirmation signal instance, or None.
                           When None, the setup is entered unconditionally.
+            day_1m: Full 1-minute candle data for the trading day.
+                    Passed to the confirmation's check() method.
 
         Returns:
             An Entry if the trade should be taken, or None to skip.
         """
-        # M3: No confirmation required — enter every setup
-        if confirmation is not None:
-            # Future: ask the confirmation module if this setup is valid
-            # For now, just enter anyway
-            pass
+        # If a confirmation is provided, ask it whether this setup qualifies
+        if confirmation is not None and day_1m is not None:
+            if not confirmation.check(setup, day_1m):
+                return None
 
         return Entry(
             date=setup.date,

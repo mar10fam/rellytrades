@@ -254,9 +254,11 @@ class Backtester:
         self,
         strategy: BaseStrategy,
         risk_config: Optional[dict] = None,
+        confirmation=None,
     ):
         self.strategy = strategy
         self.risk_config = risk_config or DEFAULT_RISK_CONFIG.copy()
+        self.confirmation = confirmation  # Optional confirmation signal (or CompositeConfirmation)
 
     def run(
         self,
@@ -336,9 +338,21 @@ class Backtester:
             # Tag setup with ticker so TradeRecord knows which stock
             setup.ticker = ticker
 
+            # Guard: skip if balance is depleted (negative balance protection)
+            if current_balance <= 0:
+                break
+
+            # Get 1m data for the trading day (needed for both confirmation and simulation)
+            day_str = setup.date.isoformat()
+            if day_str not in data_1m.index:
+                continue
+            day_1m = data_1m.loc[day_str]
+
             # Ask the strategy if this setup should be entered
-            # (In M3, confirmation=None means "always enter")
-            entry = self.strategy.get_entry(setup, confirmation=None)
+            # Pass the confirmation and day_1m so the strategy can gate entries
+            entry = self.strategy.get_entry(
+                setup, confirmation=self.confirmation, day_1m=day_1m
+            )
             if entry is None:
                 continue
 
@@ -354,12 +368,6 @@ class Backtester:
                 continue
             risk_amount = current_balance * risk_per_trade
             shares = risk_amount / risk_per_share
-
-            # Get 1m data for the trading day to simulate candle-by-candle
-            day_str = setup.date.isoformat()
-            if day_str not in data_1m.index:
-                continue
-            day_1m = data_1m.loc[day_str]
 
             # Simulate the trade (returns per-share pnl in TradeRecord)
             trade = self._simulate_trade(
@@ -456,17 +464,21 @@ class Backtester:
                 # Tag the setup with its ticker so TradeRecord knows
                 setup.ticker = ticker
 
-                entry = self.strategy.get_entry(setup, confirmation=None)
-                if entry is None:
-                    continue
-
-                exit_levels = self.strategy.get_exit(entry, setup, self.risk_config)
-
-                # Get 1m data for this day
+                # Get 1m data for this day (needed for confirmation and simulation)
                 day_str = setup.date.isoformat()
                 if day_str not in data_1m.index:
                     continue
                 day_1m = data_1m.loc[day_str]
+
+                # Ask the strategy if this setup should be entered
+                # Pass confirmation and day_1m so the strategy can gate entries
+                entry = self.strategy.get_entry(
+                    setup, confirmation=self.confirmation, day_1m=day_1m
+                )
+                if entry is None:
+                    continue
+
+                exit_levels = self.strategy.get_exit(entry, setup, self.risk_config)
 
                 all_trade_inputs.append((setup, entry, exit_levels, day_1m))
 
@@ -487,6 +499,10 @@ class Backtester:
         # Step 3: Process each trade in order, sizing from the shared balance
         trades = []
         for setup, entry, exit_levels, day_1m in all_trade_inputs:
+            # Guard: skip if balance is depleted (negative balance protection)
+            if current_balance <= 0:
+                break
+
             risk_per_share = abs(entry.price - exit_levels.stop_loss)
             if risk_per_share == 0:
                 continue
@@ -655,6 +671,10 @@ class Backtester:
         # Calculate actual dollar P&L based on position size
         dollar_pnl = pnl * shares
         balance_after = current_balance + dollar_pnl
+
+        # Floor the balance at 0 — can't go negative
+        if balance_after < 0:
+            balance_after = 0.0
 
         return TradeRecord(
             entry_time=entry.timestamp,

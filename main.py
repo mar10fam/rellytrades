@@ -1,3 +1,4 @@
+from http import client
 import os
 import time
 import pandas as pd
@@ -400,6 +401,7 @@ def run_backtest(
     risk_reward_ratio: float = 2.0,
     starting_balance: float = 1000.0,
     risk_per_trade: float = 0.01,
+    confirmations: list = None,
 ) -> None:
     """
     Run a full backtest on saved CSV data using the FVG strategy.
@@ -408,6 +410,10 @@ def run_backtest(
     and prints the results. Supports fractional shares — position size
     is calculated from the account balance and risk percentage.
 
+    Optionally accepts a list of confirmation signals that are stacked
+    with AND logic. If no confirmations are provided, all setups are
+    entered unconditionally (baseline mode).
+
     Args:
         ticker: Stock ticker symbol (e.g., "AAPL", "AMD")
         start: Start date in "YYYY-MM-DD" format (optional)
@@ -415,9 +421,12 @@ def run_backtest(
         risk_reward_ratio: Take profit multiplier relative to risk (default 2.0)
         starting_balance: Initial account balance in dollars (default 1000.0)
         risk_per_trade: Fraction of balance to risk per trade (default 0.01 = 1%)
+        confirmations: List of BaseConfirmation instances to stack (optional).
+                       When provided, ALL must pass for a trade to be entered.
     """
     from strategies.fvg_strategy import FVGStrategy
     from engine.backtester import Backtester
+    from confirmations.composite import CompositeConfirmation
 
     strategy = FVGStrategy()
     risk_config = {
@@ -425,7 +434,17 @@ def run_backtest(
         "starting_balance": starting_balance,
         "risk_per_trade": risk_per_trade,
     }
-    bt = Backtester(strategy=strategy, risk_config=risk_config)
+
+    # Wrap confirmation list in a CompositeConfirmation if provided
+    confirmation = None
+    if confirmations:
+        confirmation = CompositeConfirmation(confirmations)
+
+    bt = Backtester(
+        strategy=strategy,
+        risk_config=risk_config,
+        confirmation=confirmation,
+    )
 
     results = bt.run(ticker, start=start, end=end)
 
@@ -441,6 +460,7 @@ def run_multi_backtest(
     risk_reward_ratio: float = 2.0,
     starting_balance: float = 1000.0,
     risk_per_trade: float = 0.01,
+    confirmations: list = None,
 ) -> None:
     """
     Run a backtest across multiple tickers with a shared account balance.
@@ -448,6 +468,10 @@ def run_multi_backtest(
     All trades from all tickers are merged into a single chronological
     timeline. The balance compounds across stocks — wins on AMD grow
     your position size on the next AAPL trade, and vice versa.
+
+    Optionally accepts a list of confirmation signals that are stacked
+    with AND logic. If no confirmations are provided, all setups are
+    entered unconditionally (baseline mode).
 
     This simulates monitoring a watchlist and trading any stock that
     gives a setup, all from the same account.
@@ -459,9 +483,12 @@ def run_multi_backtest(
         risk_reward_ratio: Take profit multiplier relative to risk (default 2.0)
         starting_balance: Initial account balance in dollars (default 1000.0)
         risk_per_trade: Fraction of balance to risk per trade (default 0.01 = 1%)
+        confirmations: List of BaseConfirmation instances to stack (optional).
+                       When provided, ALL must pass for a trade to be entered.
     """
     from strategies.fvg_strategy import FVGStrategy
     from engine.backtester import Backtester
+    from confirmations.composite import CompositeConfirmation
 
     strategy = FVGStrategy()
     risk_config = {
@@ -469,7 +496,17 @@ def run_multi_backtest(
         "starting_balance": starting_balance,
         "risk_per_trade": risk_per_trade,
     }
-    bt = Backtester(strategy=strategy, risk_config=risk_config)
+
+    # Wrap confirmation list in a CompositeConfirmation if provided
+    confirmation = None
+    if confirmations:
+        confirmation = CompositeConfirmation(confirmations)
+
+    bt = Backtester(
+        strategy=strategy,
+        risk_config=risk_config,
+        confirmation=confirmation,
+    )
 
     results = bt.run_multi(tickers, start=start, end=end)
 
@@ -480,12 +517,25 @@ def run_multi_backtest(
 
 # === Main Entry Point ===
 if __name__ == "__main__":
+    client = get_polygon_client()
+    all_tickers = ["AAPL", "NVDA", "MSFT", "AMD", "AMZN", "GOOG", "META"]
+
     # To download fresh data, uncomment the block below:
-    # client = get_polygon_client()
     # print(f"Starting download for {TICKER}...")
     # print(f"Lookback: {LOOKBACK_DAYS} days (~{LOOKBACK_DAYS // 365} years)")
     # print(f"Retries: up to {MAX_RETRIES}x with {RETRY_WAIT_SECONDS}s wait on rate limit\n")
     # all_data = download_all_intervals(client, TICKER)
+
+     # Download data for multiple tickers (runs sequentially to respect rate limits)
+    # TICKERS = ["AMZN"]
+
+    # for ticker in TICKERS:
+    #     print(f"\n{'#' * 60}")
+    #     print(f"  Downloading {ticker}")
+    #     print(f"{'#' * 60}")
+    #     download_all_intervals(client, ticker)
+
+    # print("\nAll downloads complete!")
 
     # Run detection only (Milestone 2):
     # run_detection(TICKER)
@@ -493,12 +543,29 @@ if __name__ == "__main__":
     # Run single-stock backtest:
     # run_backtest(TICKER, start="2024-02-26", end="2026-02-24", risk_reward_ratio=3.0, risk_per_trade=0.02)
 
+    # --- Confirmation signal imports (M4) ---
+    from confirmations.volume_spike import VolumeSpike
+    from confirmations.vwap_cross import VWAPCross
+    from confirmations.rsi_momentum import RSIMomentum
+
     # Run multi-stock backtest (shared balance across all tickers):
+    # No confirmations (baseline — enters every setup):
+    # run_multi_backtest(
+    #     tickers=["AAPL"],
+    #     start="2024-02-26",
+    #     end="2026-02-24",
+    #     risk_reward_ratio=2.0,
+    #     risk_per_trade=0.02,
+    #     starting_balance=1000.0,
+    # )
+
+    # With confirmations stacked (AND logic — all must pass):
     run_multi_backtest(
-        tickers=["AMD", "AAPL"],
+        tickers=["AAPL"],
         start="2024-02-26",
         end="2026-02-24",
-        risk_reward_ratio=4.0,
+        risk_reward_ratio=2.0,
         risk_per_trade=0.02,
         starting_balance=1000.0,
+        confirmations=[RSIMomentum()],
     )

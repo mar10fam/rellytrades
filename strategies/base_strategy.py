@@ -120,21 +120,31 @@ class BaseStrategy(ABC):
         pass
 
     @abstractmethod
-    def get_entry(self, setup: Setup, confirmation) -> Optional[Entry]:
+    def get_entry(
+        self,
+        setup: Setup,
+        confirmation=None,
+        day_1m: pd.DataFrame = None,
+    ) -> Optional[Entry]:
         """
         Determine whether to enter a trade based on a detected setup
-        and a confirmation signal.
+        and an optional confirmation signal.
 
-        Placeholder for Milestone 3+ — not used in Milestone 2.
+        If a confirmation is provided, the strategy calls confirmation.check()
+        and only enters the trade if it passes. If confirmation is None,
+        every setup is entered unconditionally (useful for baseline testing).
 
         Args:
             setup: A previously detected Setup from detect_setup().
-            confirmation: A confirmation signal module instance
-                          (e.g., VolumeSpike, VWAPCross).
+            confirmation: A confirmation signal instance (BaseConfirmation
+                          or CompositeConfirmation), or None to skip checks.
+            day_1m: Full 1-minute candle data for the trading day.
+                    Passed to the confirmation's check() method so it can
+                    compute indicators (VWAP, RSI, volume averages, etc.).
 
         Returns:
             An Entry object if confirmed, or None if the confirmation
-            signal did not trigger.
+            signal rejected the setup.
         """
         pass
 
